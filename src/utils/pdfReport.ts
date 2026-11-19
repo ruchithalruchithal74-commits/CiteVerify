@@ -83,25 +83,39 @@ export function exportVerificationReportPdf(report: DocumentReport): void {
   writeWrapped('1. Document Information & Audit Summary', margin, maxWidth, 13, [20, 32, 28], true);
   y += 4;
   writeWrapped(
-    `Document: ${report.filename} (${report.fileType}, ${formatBytes(report.fileSizeBytes)})`,
+    `Document: ${report.filename} (${report.fileType} · ${report.extractionMethod}, ${formatBytes(report.fileSizeBytes)})   |   Auditor: ${report.userDisplayName}`,
     margin,
     maxWidth,
     10
   );
   const s = report.summaryStats;
   writeWrapped(
-    `Total Extracted Claims: ${s.totalClaims}   |   Citations Found: ${s.citationsFound}   |   Verified Publications: ${s.verifiedSources}`,
+    `Total Extracted Claims: ${s.totalClaims}   |   Citations Found: ${s.citationsFound}   |   Verified Publications: ${s.verifiedSources}   |   OA Full-Text Sources: ${s.fullTextSources || 0}`,
     margin,
     maxWidth,
     10
   );
   writeWrapped(
-    `Supported: ${s.supportedClaims}   |   Partially Supported: ${s.partiallySupportedClaims}   |   Unsupported: ${s.unsupportedClaims}   |   Contradictory: ${s.contradictoryClaims}   |   Potentially Outdated: ${s.potentiallyOutdatedClaims}   |   Needs Human Review: ${s.claimsNeedingReview}`,
+    `Supported: ${s.supportedClaims}   |   Partially Supported: ${s.partiallySupportedClaims}   |   Unsupported: ${s.unsupportedClaims}   |   Contradictory: ${s.contradictoryClaims}   |   Needs Human Review: ${s.claimsNeedingReview}   |   Figures Analyzed: ${s.figuresAnalyzed || 0}`,
     margin,
     maxWidth,
     9.5,
     [60, 75, 70]
   );
+
+  if (report.figuresAnalyzed && report.figuresAnalyzed.length > 0) {
+    y += 6;
+    writeWrapped('Figures & Graphs Vision Audit:', margin, maxWidth, 10, [20, 32, 28], true);
+    for (const fig of report.figuresAnalyzed) {
+      writeWrapped(
+        `${fig.figureId} (${fig.chartType}) — ${fig.title} [${fig.claimAlignmentStatus}]: ${fig.keyFinding}`,
+        margin,
+        maxWidth,
+        8.5,
+        [50, 62, 58]
+      );
+    }
+  }
 
   y += 8;
   writeWrapped(

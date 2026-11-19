@@ -5,13 +5,19 @@ import {
   FlaskConical,
   Loader2,
   Play,
+  ScanText,
   UploadCloud,
 } from 'lucide-react';
 import { useEffect, useRef, useState, type DragEvent } from 'react';
-import type { DocumentReport, PipelineProgressEvent } from '../types.ts';
+import type {
+  DocumentReport,
+  PipelineProgressEvent,
+  WorkspaceUser,
+} from '../types.ts';
 import { formatBytes } from '../utils/verdicts.ts';
 
 interface DocumentUploadPageProps {
+  activeUser: WorkspaceUser;
   onVerificationComplete: (report: DocumentReport) => void;
   autoTriggerSample?: boolean;
   onSampleTriggerHandled?: () => void;
@@ -21,7 +27,14 @@ interface PreviewState {
   mode: 'file' | 'sample';
   filename: string;
   fileSizeBytes: number;
-  fileType: 'PDF' | 'TXT' | 'SAMPLE';
+  fileType: 'PDF' | 'TXT' | 'IMAGE' | 'SAMPLE';
+  extractionMethod:
+    | 'PDF Text Layer'
+    | 'Gemini Vision OCR'
+    | 'Plain Text'
+    | 'Image Vision'
+    | 'Sample';
+  ocrUsed: boolean;
   previewText: string;
   totalCharacters: number;
   file?: File;
@@ -36,14 +49,15 @@ interface PreviewState {
 
 const STAGES: Array<{ stage: 1 | 2 | 3 | 4 | 5 | 6; label: string }> = [
   { stage: 1, label: 'Reading document' },
-  { stage: 2, label: 'Extracting scientific claims' },
+  { stage: 2, label: 'Extracting claims & figures' },
   { stage: 3, label: 'Detecting citations' },
-  { stage: 4, label: 'Finding original research' },
+  { stage: 4, label: 'Retrieving OA full text' },
   { stage: 5, label: 'Comparing evidence' },
   { stage: 6, label: 'Generating verification report' },
 ];
 
 export function DocumentUploadPage({
+  activeUser,
   onVerificationComplete,
   autoTriggerSample = false,
   onSampleTriggerHandled,
@@ -68,6 +82,8 @@ export function DocumentUploadPage({
         filename: data.filename,
         fileSizeBytes: data.fileSizeBytes,
         fileType: 'SAMPLE',
+        extractionMethod: 'Sample',
+        ocrUsed: false,
         previewText: data.text,
         totalCharacters: data.text.length,
         expectedMatrix: data.expectedMatrix,
@@ -93,8 +109,17 @@ export function DocumentUploadPage({
   const handleFileSelected = async (file: File) => {
     setError(null);
     const lower = file.name.toLowerCase();
-    if (!lower.endsWith('.pdf') && !lower.endsWith('.txt')) {
-      setError('Only PDF (.pdf) and Plain Text (.txt) research manuscripts are supported.');
+    const valid =
+      lower.endsWith('.pdf') ||
+      lower.endsWith('.txt') ||
+      lower.endsWith('.png') ||
+      lower.endsWith('.jpg') ||
+      lower.endsWith('.jpeg') ||
+      lower.endsWith('.webp');
+    if (!valid) {
+      setError(
+        'Supported formats: PDF (.pdf, including scanned PDFs via Vision OCR), Plain Text (.txt), or Figure/Chart Images (.png, .jpg, .webp).'
+      );
       return;
     }
 
@@ -115,6 +140,8 @@ export function DocumentUploadPage({
         filename: data.filename,
         fileSizeBytes: data.fileSizeBytes,
         fileType: data.fileType,
+        extractionMethod: data.extractionMethod || 'PDF Text Layer',
+        ocrUsed: Boolean(data.ocrUsed),
         previewText: data.previewText,
         totalCharacters: data.totalCharacters,
         file,
@@ -149,6 +176,8 @@ export function DocumentUploadPage({
 
     try {
       const formData = new FormData();
+      formData.append('userId', activeUser.id);
+      formData.append('userDisplayName', activeUser.displayName);
       if (active.mode === 'sample') {
         formData.append('mode', 'sample');
       } else if (active.file) {
@@ -218,7 +247,7 @@ export function DocumentUploadPage({
             Document Upload & Ingestion
           </h1>
           <p className="text-sm text-[#A3B5A9] mt-1.5 max-w-2xl">
-            Upload a research manuscript (PDF or TXT) to extract claims, detect citations, retrieve original OpenAlex and Crossref records, and audit evidence alignment.
+            Upload a research manuscript (PDF, scanned PDF with OCR fallback, TXT, or Figure/Chart image). CiteVerify extracts claims, inspects embedded graphs, retrieves Open-Access full text, and verifies NLI alignment.
           </p>
         </div>
 
@@ -243,7 +272,6 @@ export function DocumentUploadPage({
         </div>
       )}
 
-      {/* Upload Zone + File Metadata */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         <div className="lg:col-span-5 space-y-5">
           <div
@@ -270,7 +298,7 @@ export function DocumentUploadPage({
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf,.txt,application/pdf,text/plain"
+              accept=".pdf,.txt,.png,.jpg,.jpeg,.webp,application/pdf,text/plain,image/png,image/jpeg,image/webp"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -285,10 +313,10 @@ export function DocumentUploadPage({
               )}
             </div>
             <p className="font-display text-base font-semibold text-[#F4F1E8]">
-              Drop PDF or TXT manuscript here
+              Drop PDF, TXT, or Chart Image here
             </p>
             <p className="text-xs text-[#A3B5A9] mt-1.5">
-              Or click to browse local files · Maximum size 15 MB
+              Supports scanned PDFs (Vision OCR) & embedded figures · Max 15 MB
             </p>
           </div>
 
@@ -301,7 +329,7 @@ export function DocumentUploadPage({
               <dl className="mt-4 space-y-3 text-xs">
                 <div className="flex items-center justify-between gap-4">
                   <dt className="text-[#A3B5A9]">Filename</dt>
-                  <dd className="font-mono text-[#F4F1E8] truncate max-w-[230px]">
+                  <dd className="font-mono text-[#F4F1E8] truncate max-w-[220px]">
                     {preview.filename}
                   </dd>
                 </div>
@@ -320,10 +348,21 @@ export function DocumentUploadPage({
                   </dd>
                 </div>
                 <div className="flex items-center justify-between gap-4">
+                  <dt className="text-[#A3B5A9]">Extraction Engine</dt>
+                  <dd className="font-mono text-[#F4F1E8] inline-flex items-center gap-1.5">
+                    {preview.ocrUsed && <ScanText className="w-3.5 h-3.5 text-[#19B887]" />}
+                    {preview.extractionMethod}
+                  </dd>
+                </div>
+                <div className="flex items-center justify-between gap-4">
                   <dt className="text-[#A3B5A9]">Extracted Length</dt>
                   <dd className="font-mono tabular-nums text-[#F4F1E8]">
                     {preview.totalCharacters.toLocaleString()} chars
                   </dd>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <dt className="text-[#A3B5A9]">Auditor Profile</dt>
+                  <dd className="text-[#D6B875]">{activeUser.displayName}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-4">
                   <dt className="text-[#A3B5A9]">Processing Status</dt>
@@ -336,7 +375,7 @@ export function DocumentUploadPage({
               </dl>
             ) : (
               <p className="text-xs text-[#A3B5A9] mt-4">
-                No document loaded yet. Upload a PDF/TXT file or load the sample demonstration paper.
+                No document loaded yet. Upload a PDF, scanned manuscript, TXT, or figure image, or load the sample paper.
               </p>
             )}
 
@@ -361,7 +400,7 @@ export function DocumentUploadPage({
           </div>
         </div>
 
-        {/* Right Column: Live 6-Stage Pipeline OR Document Preview */}
+        {/* Right Column: Live 6-Stage Pipeline + Preview */}
         <div className="lg:col-span-7 space-y-6">
           {verifying && progress && (
             <div className="rounded-xl border border-[#19B887]/40 bg-[#14201C] p-6">
@@ -420,7 +459,6 @@ export function DocumentUploadPage({
             </div>
           )}
 
-          {/* Document Preview */}
           <div className="rounded-xl border border-[#25322D] bg-[#1C2623] p-6">
             <div className="flex items-center justify-between gap-3 pb-3 border-b border-[#25322D]">
               <div className="flex items-center gap-2">
@@ -429,11 +467,15 @@ export function DocumentUploadPage({
                   Extracted Document Preview
                 </h2>
               </div>
-              {preview?.mode === 'sample' && (
+              {preview?.ocrUsed ? (
+                <span className="font-mono text-xs text-[#19B887]">
+                  Vision OCR Active
+                </span>
+              ) : preview?.mode === 'sample' ? (
                 <span className="font-mono text-xs text-[#D6B875]">
                   Illustrative Demonstration Paper
                 </span>
-              )}
+              ) : null}
             </div>
 
             {preview ? (
@@ -442,19 +484,18 @@ export function DocumentUploadPage({
               </div>
             ) : (
               <div className="py-16 text-center text-xs text-[#A3B5A9]">
-                Document text extracted via PyMuPDF-compatible PDF parser or UTF-8 TXT reader will appear here before verification begins.
+                Document text extracted via PDF text parser, Vision OCR fallback (for scanned PDFs & chart images), or UTF-8 TXT reader will appear here before verification begins.
               </div>
             )}
           </div>
 
-          {/* Sample Expected Results Matrix */}
           {preview?.mode === 'sample' && preview.expectedMatrix && (
             <div className="rounded-xl border border-[#D6B875]/30 bg-[#14201C] p-5">
               <p className="font-mono text-xs text-[#D6B875] mb-1">
                 Sample Demonstration Test Specification
               </p>
               <p className="text-xs text-[#A3B5A9] mb-4">
-                This manuscript blends genuine published DOIs (queried live against OpenAlex and Crossref) with clearly labeled illustrative demonstration sources to exercise all 7 edge cases:
+                This manuscript blends genuine published DOIs (queried live against OpenAlex, Crossref, Unpaywall & Europe PMC) with clearly labeled illustrative demonstration sources to exercise all 7 edge cases:
               </p>
               <div className="space-y-2">
                 {preview.expectedMatrix.map((item, idx) => (

@@ -55,10 +55,22 @@ export interface DetectedCitation {
   matchedBibEntry?: BibliographyEntry;
 }
 
+export interface FigureAnalysis {
+  figureId: string;
+  title: string;
+  chartType: string;
+  axesAndUnits: string;
+  extractedValues: string[];
+  keyFinding: string;
+  claimAlignmentStatus: 'Aligned' | 'Discrepancy Detected' | 'Informational';
+  claimAlignmentNote: string;
+}
+
 export interface ResearchSourceRecord {
   verified: boolean;
   openAlexFound: boolean;
   crossrefFound: boolean;
+  unpaywallFound?: boolean;
   openAlexId?: string;
   title?: string;
   authors: string[];
@@ -66,9 +78,15 @@ export interface ResearchSourceRecord {
   doi?: string;
   journal?: string;
   sourceUrl?: string;
+  openAccessUrl?: string;
+  fullTextRetrieved?: boolean;
+  fullTextChunksUsed?: string[];
   abstractText?: string;
   relevantPassage?: string;
   passageSource:
+    | 'Open-Access Full Text (PDF)'
+    | 'Open-Access Full Text (HTML/XML)'
+    | 'Europe PMC Full Text'
     | 'OpenAlex Abstract'
     | 'Crossref Abstract'
     | 'Europe PMC Abstract'
@@ -168,6 +186,7 @@ export interface DocumentSummaryStats {
   totalClaims: number;
   citationsFound: number;
   verifiedSources: number;
+  fullTextSources: number;
   supportedClaims: number;
   partiallySupportedClaims: number;
   unsupportedClaims: number;
@@ -177,6 +196,7 @@ export interface DocumentSummaryStats {
   numericalMismatches: number;
   contextTrapsDetected: number;
   citationIssuesCount: number;
+  figuresAnalyzed: number;
 }
 
 export interface TimelineBucket {
@@ -187,9 +207,18 @@ export interface TimelineBucket {
 
 export interface DocumentReport {
   reportId: string;
+  userId: string;
+  userDisplayName: string;
   filename: string;
   fileSizeBytes: number;
-  fileType: 'PDF' | 'TXT' | 'SAMPLE';
+  fileType: 'PDF' | 'TXT' | 'IMAGE' | 'SAMPLE';
+  extractionMethod:
+    | 'PDF Text Layer'
+    | 'Gemini Vision OCR'
+    | 'Plain Text'
+    | 'Image Vision'
+    | 'Sample';
+  ocrUsed: boolean;
   uploadedAt: string;
   isSampleDemo: boolean;
   extractedTextPreview: string;
@@ -197,6 +226,7 @@ export interface DocumentReport {
   bibliographyEntries: BibliographyEntry[];
   detectedCitations: DetectedCitation[];
   citationAudit: CitationAuditItem[];
+  figuresAnalyzed: FigureAnalysis[];
   claims: ClaimAnalysis[];
   summaryStats: DocumentSummaryStats;
   timelineData: TimelineBucket[];
@@ -208,4 +238,56 @@ export interface PipelineProgressEvent {
   stageName: string;
   detail: string;
   percent: number;
+}
+
+export type BenchmarkCategory =
+  | 'Supported'
+  | 'Numeric-Drift'
+  | 'Contradicted'
+  | 'Fabricated';
+
+export interface BenchmarkClassMetrics {
+  category: BenchmarkCategory;
+  total: number;
+  predictedPositive: number;
+  truePositive: number;
+  precision: number;
+  recall: number;
+  f1: number;
+}
+
+export interface BenchmarkItemResult {
+  id: string;
+  domain: string;
+  expectedCategory: BenchmarkCategory;
+  predictedCategory: BenchmarkCategory;
+  correct: boolean;
+  claimText: string;
+  nliLabel: NLILabel;
+  numericalStatus: string;
+  contextTrapDetected: boolean;
+  latencyMs?: number;
+  rationale: string;
+}
+
+export interface BenchmarkRunSummary {
+  runId: string;
+  ranAt: string;
+  userId: string;
+  totalItems: number;
+  correctItems: number;
+  overallAccuracy: number;
+  macroPrecision: number;
+  macroRecall: number;
+  macroF1: number;
+  durationMs: number;
+  classMetrics: BenchmarkClassMetrics[];
+  confusionMatrix: Record<BenchmarkCategory, Record<BenchmarkCategory, number>>;
+  items: BenchmarkItemResult[];
+}
+
+export interface WorkspaceUser {
+  id: string;
+  displayName: string;
+  role: string;
 }

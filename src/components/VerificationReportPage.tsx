@@ -54,7 +54,7 @@ export function VerificationReportPage({
             Final Verification Report
           </h1>
           <p className="text-xs text-[#A3B5A9] mt-1.5">
-            {report.filename} · {report.fileType} · {formatBytes(report.fileSizeBytes)} · Generated{' '}
+            {report.filename} · {report.fileType} · {report.extractionMethod} · Auditor: {report.userDisplayName} · {formatBytes(report.fileSizeBytes)} · Generated{' '}
             {formatShortDate(report.uploadedAt)}
           </p>
         </div>
@@ -104,26 +104,63 @@ export function VerificationReportPage({
             <p className="text-xl font-semibold text-[#E05265] mt-1">{s.contradictoryClaims}</p>
           </div>
           <div className="p-3 rounded-lg bg-[#141D1A] border border-[#24312C]">
-            <p className="text-[#A3B5A9] font-sans">Potentially Outdated</p>
-            <p className="text-xl font-semibold text-[#A78BFA] mt-1">{s.potentiallyOutdatedClaims}</p>
+            <p className="text-[#A3B5A9] font-sans">OA Full Text Used</p>
+            <p className="text-xl font-semibold text-[#19B887] mt-1">{s.fullTextSources || 0}</p>
           </div>
           <div className="p-3 rounded-lg bg-[#141D1A] border border-[#24312C]">
             <p className="text-[#A3B5A9] font-sans">Needs Human Review</p>
             <p className="text-xl font-semibold text-[#56B4D3] mt-1">{s.claimsNeedingReview}</p>
           </div>
           <div className="p-3 rounded-lg bg-[#141D1A] border border-[#24312C]">
-            <p className="text-[#A3B5A9] font-sans">Context Traps</p>
-            <p className="text-xl font-semibold text-[#E9AC45] mt-1">{s.contextTrapsDetected}</p>
+            <p className="text-[#A3B5A9] font-sans">Figures Analyzed</p>
+            <p className="text-xl font-semibold text-[#D6B875] mt-1">{s.figuresAnalyzed || 0}</p>
           </div>
         </div>
 
         <div className="mt-5 pt-4 border-t border-[#25322D] flex items-start gap-2.5 text-xs text-[#A3B5A9]">
           <ShieldAlert className="w-4 h-4 text-[#D6B875] shrink-0 mt-0.5" />
           <span>
-            Automated findings reflect evidence retrieved from OpenAlex and Crossref abstracts plus NLI evaluation; final academic determinations remain the responsibility of qualified human reviewers.
+            Automated findings reflect evidence retrieved from OpenAlex, Crossref, Unpaywall, Europe PMC full text, and NLI evaluation; final academic determinations remain the responsibility of qualified human reviewers.
           </span>
         </div>
       </div>
+
+      {report.figuresAnalyzed && report.figuresAnalyzed.length > 0 && (
+        <div className="rounded-xl border border-[#25322D] bg-[#1C2623] p-6 space-y-3">
+          <h2 className="font-display text-lg font-semibold text-[#F4F1E8]">
+            Figures & Graphs Vision Audit ({report.figuresAnalyzed.length})
+          </h2>
+          <div className="space-y-3">
+            {report.figuresAnalyzed.map((f) => (
+              <div
+                key={f.figureId}
+                className="rounded-lg border border-[#24312C] bg-[#141D1A] p-4 text-xs space-y-1"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 font-mono">
+                  <span className="text-[#D6B875] font-semibold">
+                    {f.figureId} · {f.chartType}
+                  </span>
+                  <span
+                    style={{
+                      color:
+                        f.claimAlignmentStatus === 'Discrepancy Detected'
+                          ? '#E05265'
+                          : '#22C58B',
+                    }}
+                  >
+                    {f.claimAlignmentStatus}
+                  </span>
+                </div>
+                <p className="text-sm font-medium text-[#F4F1E8]">{f.title}</p>
+                <p className="text-[#A3B5A9]">{f.keyFinding}</p>
+                {f.claimAlignmentNote && (
+                  <p className="text-[#A3B5A9] italic">{f.claimAlignmentNote}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Claim-by-Claim Structured Dossier */}
       <div className="space-y-4">

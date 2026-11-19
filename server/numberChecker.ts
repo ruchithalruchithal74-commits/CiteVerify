@@ -8,19 +8,41 @@ interface ExtractedMetric {
   contextWindow: string;
 }
 
+function parseFormattedNumber(rawNum: string): number {
+  return parseFloat(rawNum.replace(/,/g, ''));
+}
+
+function normalizeUnitLabel(rawUnit: string): string {
+  const lower = rawUnit.toLowerCase();
+  const singularMap: Record<string, string> = {
+    seconds: 'second',
+    minutes: 'minute',
+    hours: 'hour',
+    days: 'day',
+    weeks: 'week',
+    months: 'month',
+    years: 'year',
+    patients: 'patient',
+    participants: 'participant',
+    samples: 'sample',
+  };
+  return singularMap[lower] || lower;
+}
+
 export function extractNumericMetrics(text: string): ExtractedMetric[] {
   if (!text) return [];
   const metrics: ExtractedMetric[] = [];
 
-  // Percentages: e.g., 95%, 62.4%, 80 percent
-  const pctRegex = /(\d+(?:\.\d+)?)\s*(%|percent\b|percentage points?\b)/gi;
+  // Percentages: e.g., 95%, -14.9%, 62.4%, 80 percent
+  const pctRegex =
+    /(?<![A-Za-z0-9.,])((?:-?\d{1,3}(?:,\d{3})+|-?\d+)(?:\.\d+)?)\s*(%|percent\b|percentage points?\b)/gi;
   let m: RegExpExecArray | null;
   while ((m = pctRegex.exec(text)) !== null) {
     const start = Math.max(0, m.index - 40);
     const end = Math.min(text.length, m.index + m[0].length + 40);
     metrics.push({
       raw: m[0],
-      value: parseFloat(m[1]),
+      value: parseFormattedNumber(m[1]),
       unit: 'percent',
       unitLabel: m[2].toLowerCase().includes('point') ? 'percentage points' : '%',
       contextWindow: text.slice(start, end).trim(),
@@ -41,41 +63,42 @@ export function extractNumericMetrics(text: string): ExtractedMetric[] {
     });
   }
 
-  // Sample size: n = 120, N=450
-  const nRegex = /\bn\s*=\s*(\d{2,7})/gi;
+  // Sample size: n = 120, n = 5,000
+  const nRegex = /\bn\s*=\s*((?:(?:\d{1,3}(?:,\d{3})+)|\d{2,7}))\b/gi;
   while ((m = nRegex.exec(text)) !== null) {
     const start = Math.max(0, m.index - 30);
     const end = Math.min(text.length, m.index + m[0].length + 30);
     metrics.push({
       raw: m[0],
-      value: parseInt(m[1], 10),
+      value: parseInt(m[1].replace(/,/g, ''), 10),
       unit: 'sample-size',
       unitLabel: 'sample size (n)',
       contextWindow: text.slice(start, end).trim(),
     });
   }
 
-  // Fold changes: 2.5-fold, 3x
-  const foldRegex = /(\d+(?:\.\d+)?)\s*(?:-?fold\b|x\b)/gi;
+  // Fold changes: 2.5-fold, 12-fold, 3x
+  const foldRegex = /(?<![A-Za-z0-9.,-])((?:(?:\d{1,3}(?:,\d{3})+)|\d+)(?:\.\d+)?)\s*(?:-?fold\b|x\b)/gi;
   while ((m = foldRegex.exec(text)) !== null) {
     const start = Math.max(0, m.index - 30);
     const end = Math.min(text.length, m.index + m[0].length + 30);
     metrics.push({
       raw: m[0],
-      value: parseFloat(m[1]),
+      value: parseFormattedNumber(m[1]),
       unit: 'fold',
       unitLabel: 'fold',
       contextWindow: text.slice(start, end).trim(),
     });
   }
 
-  // Quantitative measurements with units (ms, s, mg, kg, mL, hours, days, patients, cases)
+  // Quantitative measurements with units (supports "28-day", "1,000 hours", "0.96 Angstroms")
   const unitRegex =
-    /(\d+(?:\.\d+)?)\s*(ms|seconds?|minutes?|hours?|days?|weeks?|months?|years?|mg\/dL|mg|kg|mL|mmHg|patients|participants|samples)\b/gi;
+    /(?<![A-Za-z0-9.,-])((?:(?:\d{1,3}(?:,\d{3})+)|\d+)(?:\.\d+)?)(?:\s+|-)((?:ms|seconds?|minutes?|hours?|days?|weeks?|months?|years?|mg\/dL|mg|kg|mL|mmHg|Angstroms?|patients?|participants?|samples?))\b/gi;
   while ((m = unitRegex.exec(text)) !== null) {
-    // Skip years like 2021 years
-    const val = parseFloat(m[1]);
-    if (m[2].toLowerCase().startsWith('year') && val > 1900 && val < 2100) {
+    const val = parseFormattedNumber(m[1]);
+    const normUnit = normalizeUnitLabel(m[2]);
+    // Skip calendar years like "2021 year"
+    if (normUnit === 'year' && val > 1900 && val < 2100) {
       continue;
     }
     const start = Math.max(0, m.index - 35);
@@ -84,7 +107,7 @@ export function extractNumericMetrics(text: string): ExtractedMetric[] {
       raw: m[0],
       value: val,
       unit: 'absolute',
-      unitLabel: m[2].toLowerCase(),
+      unitLabel: normUnit,
       contextWindow: text.slice(start, end).trim(),
     });
   }
@@ -135,7 +158,6 @@ export function runRuleBasedNumericalCheck(
     };
   }
 
-  // Match comparable metrics by unit type
   const mismatches: string[] = [];
   const matches: string[] = [];
 
@@ -147,7 +169,6 @@ export function runRuleBasedNumericalCheck(
     );
     if (sameUnitCandidates.length === 0) continue;
 
-    // Find closest value in same unit
     const sorted = [...sameUnitCandidates].sort(
       (a, b) => Math.abs(a.value - cm.value) - Math.abs(b.value - cm.value)
     );

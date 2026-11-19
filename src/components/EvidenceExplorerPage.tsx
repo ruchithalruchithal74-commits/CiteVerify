@@ -288,8 +288,17 @@ export function EvidenceExplorerPage({
                       <span aria-hidden="true">·</span>
                       <span className="text-[#A3B5A9]">
                         OpenAlex: {displayedSource.openAlexFound ? 'Match' : 'No'} / Crossref:{' '}
-                        {displayedSource.crossrefFound ? 'Match' : 'No'}
+                        {displayedSource.crossrefFound ? 'Match' : 'No'} / Unpaywall:{' '}
+                        {displayedSource.unpaywallFound ? 'OA' : 'No'}
                       </span>
+                      {displayedSource.fullTextRetrieved && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="text-[#19B887] font-semibold">
+                            OA Full Text Retrieved
+                          </span>
+                        </>
+                      )}
                     </div>
                     <h2 className="font-display text-xl sm:text-2xl font-semibold text-[#F4F1E8] leading-snug">
                       {displayedSource.title || 'Publication Title Unavailable'}
@@ -298,12 +307,14 @@ export function EvidenceExplorerPage({
 
                   {displayedSource.sourceUrl && !displayedSource.isIllustrativeDemo && (
                     <a
-                      href={displayedSource.sourceUrl}
+                      href={displayedSource.openAccessUrl || displayedSource.sourceUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#19B887] text-[#0B1411] text-xs font-semibold hover:bg-[#1FD099] transition-colors whitespace-nowrap shrink-0"
                     >
-                      Open Original Publication
+                      {displayedSource.openAccessUrl
+                        ? 'Open Full Text (OA)'
+                        : 'Open Original Publication'}
                       <ExternalLink className="w-3.5 h-3.5" />
                     </a>
                   )}
@@ -365,6 +376,10 @@ export function EvidenceExplorerPage({
                       fullText={displayedSource.abstractText}
                       highlightPassage={displayedSource.relevantPassage}
                     />
+                  ) : displayedSource.relevantPassage ? (
+                    <p className="text-sm text-[#F4F1E8]/90 leading-relaxed">
+                      {displayedSource.relevantPassage}
+                    </p>
                   ) : (
                     <div className="flex items-start gap-3 py-4 text-xs text-[#F07867]">
                       <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -374,11 +389,28 @@ export function EvidenceExplorerPage({
                         </p>
                         <p className="text-[#A3B5A9] mt-1">
                           {displayedSource.retrievalNote ||
-                            'Neither OpenAlex nor Crossref exposed an open abstract for this publication. CiteVerify never fabricates source passages or page numbers.'}
+                            'Neither OpenAlex, Crossref, Unpaywall, nor Europe PMC exposed an open abstract or full text for this publication. CiteVerify never fabricates source passages or page numbers.'}
                         </p>
                       </div>
                     </div>
                   )}
+
+                  {displayedSource.fullTextChunksUsed &&
+                    displayedSource.fullTextChunksUsed.length > 0 && (
+                      <div className="pt-4 mt-3 border-t border-[#24312C] space-y-2.5">
+                        <p className="font-mono text-[11px] text-[#19B887]">
+                          Semantic Full-Text Excerpts Retrieved Beyond Abstract ({displayedSource.fullTextChunksUsed.length})
+                        </p>
+                        {displayedSource.fullTextChunksUsed.map((chunk, i) => (
+                          <div
+                            key={i}
+                            className="rounded-lg border border-[#24312C] bg-[#101414] p-3 text-xs text-[#A3B5A9] leading-relaxed"
+                          >
+                            {chunk}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                 </div>
 
                 {/* Findings, Limitations, Experimental Conditions */}

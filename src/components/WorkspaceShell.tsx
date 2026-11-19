@@ -4,19 +4,23 @@ import {
   Download,
   FileCheck2,
   FileUp,
+  Gauge,
   Home,
   Menu,
+  Plus,
   SearchCheck,
+  Users,
   X,
 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
-import type { DocumentReport } from '../types.ts';
+import { useState, type FormEvent, type ReactNode } from 'react';
+import type { DocumentReport, WorkspaceUser } from '../types.ts';
 
 export type WorkspacePage =
   | 'upload'
   | 'dashboard'
   | 'claims'
   | 'evidence'
+  | 'benchmark'
   | 'report';
 
 interface WorkspaceShellProps {
@@ -25,6 +29,12 @@ interface WorkspaceShellProps {
   onGoHome: () => void;
   activeReport: DocumentReport | null;
   reports: DocumentReport[];
+  users: WorkspaceUser[];
+  activeUser: WorkspaceUser;
+  filterByUser: boolean;
+  onToggleFilterByUser: (next: boolean) => void;
+  onSelectUser: (userId: string) => void;
+  onCreateUser: (displayName: string, role: string) => Promise<void>;
   onSelectReport: (reportId: string) => void;
   onExportPdf: () => void;
   children: ReactNode;
@@ -39,6 +49,7 @@ const NAV_ITEMS: Array<{
   { id: 'dashboard', label: 'Analysis Dashboard', icon: BarChart3 },
   { id: 'claims', label: 'Claim Investigation', icon: SearchCheck },
   { id: 'evidence', label: 'Evidence Explorer', icon: BookOpenCheck },
+  { id: 'benchmark', label: 'Evaluation Benchmark', icon: Gauge },
   { id: 'report', label: 'Verification Report', icon: FileCheck2 },
 ];
 
@@ -48,14 +59,37 @@ export function WorkspaceShell({
   onGoHome,
   activeReport,
   reports,
+  users,
+  activeUser,
+  filterByUser,
+  onToggleFilterByUser,
+  onSelectUser,
+  onCreateUser,
   onSelectReport,
   onExportPdf,
   children,
 }: WorkspaceShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [addingUser, setAddingUser] = useState(false);
+  const [newUserName, setNewUserName] = useState('');
+  const [newUserRole, setNewUserRole] = useState('Research Auditor');
+  const [creatingUser, setCreatingUser] = useState(false);
 
   const pageTitle =
     NAV_ITEMS.find((n) => n.id === activePage)?.label || 'Workspace';
+
+  const handleAddUser = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!newUserName.trim()) return;
+    setCreatingUser(true);
+    try {
+      await onCreateUser(newUserName.trim(), newUserRole.trim());
+      setNewUserName('');
+      setAddingUser(false);
+    } finally {
+      setCreatingUser(false);
+    }
+  };
 
   const sidebarContent = (
     <div className="flex flex-col h-full bg-[#14201C] border-r border-[#22322C]">
@@ -80,6 +114,75 @@ export function WorkspaceShell({
         >
           <X className="w-5 h-5" />
         </button>
+      </div>
+
+      {/* Multi-User Researcher Profile Switcher (SQLite backed) */}
+      <div className="px-3.5 py-3 border-b border-[#22322C] bg-[#101916]/60 space-y-2">
+        <div className="flex items-center justify-between gap-2 text-[11px] text-[#A3B5A9]">
+          <span className="inline-flex items-center gap-1.5 font-medium">
+            <Users className="w-3.5 h-3.5 text-[#D6B875]" />
+            Active Auditor
+          </span>
+          <button
+            type="button"
+            onClick={() => setAddingUser((v) => !v)}
+            className="inline-flex items-center gap-1 text-[#19B887] hover:underline cursor-pointer"
+          >
+            <Plus className="w-3 h-3" />
+            New
+          </button>
+        </div>
+
+        <select
+          value={activeUser.id}
+          onChange={(e) => onSelectUser(e.target.value)}
+          aria-label="Active workspace researcher"
+          className="w-full px-2.5 py-1.5 rounded-lg bg-[#101414] border border-[#283631] text-xs text-[#F4F1E8] focus:outline-none focus:border-[#19B887]"
+        >
+          {users.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.displayName} ({u.role})
+            </option>
+          ))}
+        </select>
+
+        {addingUser && (
+          <form onSubmit={handleAddUser} className="space-y-1.5 pt-1">
+            <input
+              type="text"
+              value={newUserName}
+              onChange={(e) => setNewUserName(e.target.value)}
+              placeholder="Researcher name..."
+              className="w-full px-2.5 py-1.5 rounded bg-[#101414] border border-[#283631] text-xs text-[#F4F1E8] placeholder:text-[#A3B5A9]/50 focus:outline-none focus:border-[#19B887]"
+            />
+            <div className="flex items-center gap-1.5">
+              <input
+                type="text"
+                value={newUserRole}
+                onChange={(e) => setNewUserRole(e.target.value)}
+                placeholder="Role"
+                className="flex-1 min-w-0 px-2.5 py-1 rounded bg-[#101414] border border-[#283631] text-[11px] text-[#A3B5A9] focus:outline-none focus:border-[#19B887]"
+              />
+              <button
+                type="submit"
+                disabled={creatingUser}
+                className="px-2.5 py-1 rounded bg-[#19B887] text-[#0B1411] text-[11px] font-semibold cursor-pointer disabled:opacity-50"
+              >
+                Add
+              </button>
+            </div>
+          </form>
+        )}
+
+        <label className="flex items-center gap-2 text-[11px] text-[#A3B5A9] cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={filterByUser}
+            onChange={(e) => onToggleFilterByUser(e.target.checked)}
+            className="accent-[#19B887]"
+          />
+          <span>Filter history to my audits</span>
+        </label>
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
@@ -109,10 +212,10 @@ export function WorkspaceShell({
         {reports.length > 0 && (
           <div className="pt-6 mt-6 border-t border-[#22322C] px-2">
             <p className="text-[11px] font-medium text-[#A3B5A9] mb-2">
-              Analyzed Manuscripts
+              Persisted Audit History ({reports.length})
             </p>
             <div className="space-y-1.5">
-              {reports.slice(0, 5).map((r) => {
+              {reports.slice(0, 6).map((r) => {
                 const isSelected = activeReport?.reportId === r.reportId;
                 return (
                   <button
@@ -129,8 +232,8 @@ export function WorkspaceShell({
                     }`}
                   >
                     <p className="font-medium truncate">{r.filename}</p>
-                    <p className="font-mono text-[10px] text-[#D6B875] mt-0.5 tabular-nums">
-                      {r.summaryStats.totalClaims} claims · {r.fileType}
+                    <p className="font-mono text-[10px] text-[#D6B875] mt-0.5 tabular-nums truncate">
+                      {r.summaryStats.totalClaims} claims · {r.fileType} · {r.userDisplayName}
                     </p>
                   </button>
                 );
@@ -155,15 +258,13 @@ export function WorkspaceShell({
 
   return (
     <div className="min-h-screen bg-[#101414] text-[#F4F1E8] flex">
-      {/* Desktop Sidebar */}
-      <aside className="hidden lg:block w-[252px] shrink-0 sticky top-0 h-screen">
+      <aside className="hidden lg:block w-[262px] shrink-0 sticky top-0 h-screen">
         {sidebarContent}
       </aside>
 
-      {/* Mobile Drawer */}
       {mobileNavOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
-          <div className="w-[268px] h-full">{sidebarContent}</div>
+          <div className="w-[274px] h-full">{sidebarContent}</div>
           <div
             className="flex-1 bg-black/60"
             onClick={() => setMobileNavOpen(false)}
@@ -171,7 +272,6 @@ export function WorkspaceShell({
         </div>
       )}
 
-      {/* Main Content Viewport */}
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="sticky top-0 z-20 bg-[#101414]/92 backdrop-blur-md border-b border-[#212D29] px-5 lg:px-8 py-3.5 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
@@ -193,7 +293,7 @@ export function WorkspaceShell({
               </div>
               {activeReport && (
                 <p className="text-xs text-[#A3B5A9] truncate mt-0.5">
-                  {activeReport.filename}
+                  {activeReport.filename} · {activeReport.extractionMethod}
                   {activeReport.isSampleDemo && ' · Illustrative Sample Mode'}
                 </p>
               )}

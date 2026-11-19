@@ -7,3 +7,4 @@ coverage/
 .env*
 !.env.example
 .citeverify-reports.json
+.citeverify.db*

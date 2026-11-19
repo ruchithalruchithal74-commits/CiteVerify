@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   ArrowRight,
+  BarChart2,
   BookCheck,
   CheckCircle2,
   FileWarning,
@@ -49,7 +50,7 @@ export function AnalysisDashboardPage({
           No manuscript analyzed yet
         </h2>
         <p className="text-sm text-[#A3B5A9] mt-2 leading-relaxed">
-          Upload a PDF or TXT research paper to populate live verification analytics, or run the 7-case Sample Demonstration manuscript.
+          Upload a PDF, scanned PDF, TXT, or figure image to populate live verification analytics, or run the 7-case Sample Demonstration manuscript.
         </p>
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
           <button
@@ -73,6 +74,7 @@ export function AnalysisDashboardPage({
   }
 
   const s = report.summaryStats;
+  const figures = report.figuresAnalyzed || [];
 
   const statCards: Array<{
     label: string;
@@ -153,6 +155,11 @@ export function AnalysisDashboardPage({
       color: '#22C58B',
     },
     {
+      label: 'Open-Access Full-Text Sources',
+      count: s.fullTextSources || 0,
+      color: '#19B887',
+    },
+    {
       label: 'Missing Citations',
       count: report.claims.filter((c) => c.citationFlags.includes('Missing Citation')).length,
       color: '#F07867',
@@ -188,7 +195,9 @@ export function AnalysisDashboardPage({
           </h1>
           <p className="text-sm text-[#A3B5A9] mt-1">
             Live empirical audit for <span className="text-[#F4F1E8]">{report.filename}</span> · Report{' '}
-            <span className="font-mono text-[#D6B875]">{report.reportId}</span>
+            <span className="font-mono text-[#D6B875]">{report.reportId}</span> · Auditor{' '}
+            <span className="text-[#F4F1E8]">{report.userDisplayName}</span> · {report.extractionMethod}
+            {report.ocrUsed ? ' (OCR)' : ''}
           </p>
         </div>
 
@@ -209,7 +218,7 @@ export function AnalysisDashboardPage({
             <span className="font-semibold text-[#D6B875]">
               Sample Demonstration Mode:
             </span>{' '}
-            Genuine references ([1], [2], [5]) were queried live via OpenAlex & Crossref, while CV-DEMO-03, CV-DEMO-04, and CV-DEMO-06 use clearly labeled illustrative synthetic corpus excerpts for controlled edge-case testing.
+            Genuine references ([1], [2], [5]) were queried live via OpenAlex, Crossref, Unpaywall & Europe PMC, while CV-DEMO-03, CV-DEMO-04, and CV-DEMO-06 use clearly labeled illustrative synthetic corpus excerpts for controlled edge-case testing.
           </div>
         </div>
       )}
@@ -330,7 +339,7 @@ export function AnalysisDashboardPage({
             Claim Status Breakdown
           </h2>
           <p className="text-xs text-[#A3B5A9] mt-0.5 mb-4">
-            Claim counts by verification outcome, numerical mismatches ({s.numericalMismatches}), and context traps ({s.contextTrapsDetected})
+            Claim counts by verification outcome, numerical mismatches ({s.numericalMismatches}), context traps ({s.contextTrapsDetected}), and OA full-text matches ({s.fullTextSources || 0})
           </p>
 
           <div className="h-[250px]">
@@ -373,9 +382,77 @@ export function AnalysisDashboardPage({
         </div>
       </div>
 
+      {/* Multimodal Figures & Graphs Vision Analysis (shown whenever figures/charts detected) */}
+      {figures.length > 0 && (
+        <section className="rounded-xl border border-[#25322D] bg-[#1C2623] p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[#25322D]">
+            <div className="flex items-center gap-2.5">
+              <BarChart2 className="w-5 h-5 text-[#19B887]" />
+              <div>
+                <h2 className="font-display text-lg font-semibold text-[#F4F1E8]">
+                  Figures & Graphs Vision Analysis
+                </h2>
+                <p className="text-xs text-[#A3B5A9]">
+                  Multimodal inspection of charts, plots, axes, and numerical consistency against manuscript prose
+                </p>
+              </div>
+            </div>
+            <span className="font-mono text-xs text-[#D6B875] tabular-nums">
+              {figures.length} visual figure{figures.length === 1 ? '' : 's'} analyzed
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {figures.map((fig) => {
+              const statusColor =
+                fig.claimAlignmentStatus === 'Discrepancy Detected'
+                  ? '#E05265'
+                  : fig.claimAlignmentStatus === 'Aligned'
+                  ? '#22C58B'
+                  : '#D6B875';
+
+              return (
+                <div
+                  key={fig.figureId}
+                  className="rounded-lg border border-[#283530] bg-[#141D1A] p-4 space-y-2.5 text-xs"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-mono">
+                      <span className="font-semibold text-[#D6B875]">{fig.figureId}</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="text-[#A3B5A9]">{fig.chartType}</span>
+                    </div>
+                    <span className="font-mono font-semibold" style={{ color: statusColor }}>
+                      {fig.claimAlignmentStatus}
+                    </span>
+                  </div>
+
+                  <p className="text-sm font-semibold text-[#F4F1E8]">{fig.title}</p>
+                  <p className="text-[#A3B5A9]">
+                    <strong className="text-[#F4F1E8]">Axes & Units:</strong> {fig.axesAndUnits}
+                  </p>
+                  <p className="text-[#F4F1E8]/90 leading-relaxed">{fig.keyFinding}</p>
+
+                  {fig.extractedValues.length > 0 && (
+                    <p className="font-mono text-[11px] text-[#19B887]">
+                      Extracted Values: {fig.extractedValues.join(' · ')}
+                    </p>
+                  )}
+
+                  {fig.claimAlignmentNote && (
+                    <p className="text-[#A3B5A9] pt-2 border-t border-[#22302B]">
+                      {fig.claimAlignmentNote}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {/* Bottom Row: Citation Quality + Research Source Timeline + Activity */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Citation Quality Overview */}
         <div className="lg:col-span-4 rounded-xl border border-[#25322D] bg-[#1C2623] p-6">
           <h2 className="font-display text-lg font-semibold text-[#F4F1E8]">
             Citation Quality Overview
@@ -401,7 +478,6 @@ export function AnalysisDashboardPage({
           </div>
         </div>
 
-        {/* Research Source Timeline */}
         <div className="lg:col-span-4 rounded-xl border border-[#25322D] bg-[#1C2623] p-6">
           <h2 className="font-display text-lg font-semibold text-[#F4F1E8]">
             Research Source Timeline
@@ -462,13 +538,12 @@ export function AnalysisDashboardPage({
           )}
         </div>
 
-        {/* Recent Verification Activity */}
         <div className="lg:col-span-4 rounded-xl border border-[#25322D] bg-[#1C2623] p-6">
           <h2 className="font-display text-lg font-semibold text-[#F4F1E8]">
             Recent Verification Activity
           </h2>
           <p className="text-xs text-[#A3B5A9] mt-0.5 mb-4">
-            Audited manuscripts in this workspace
+            SQLite-persisted multi-user audit history
           </p>
           <div className="space-y-3">
             {reports.slice(0, 4).map((r) => (
@@ -491,7 +566,7 @@ export function AnalysisDashboardPage({
                   </span>
                 </div>
                 <p className="font-mono text-[11px] text-[#A3B5A9] mt-1 tabular-nums">
-                  {r.summaryStats.totalClaims} claims · {r.summaryStats.verifiedSources} verified · {formatShortDate(r.uploadedAt)}
+                  {r.summaryStats.totalClaims} claims · {r.userDisplayName} · {formatShortDate(r.uploadedAt)}
                 </p>
               </button>
             ))}

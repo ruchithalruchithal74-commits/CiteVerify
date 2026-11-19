@@ -1,6 +1,4 @@
 import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
 import type {
   BibliographyEntry,
   CitationAuditItem,
@@ -8,71 +6,49 @@ import type {
   ClaimAnalysis,
   DocumentReport,
   DocumentSummaryStats,
+  FigureAnalysis,
   PipelineProgressEvent,
   ResearchSourceRecord,
   TimelineBucket,
 } from '../src/types.ts';
 import {
+  analyzeDocumentFiguresAndGraphs,
   evaluateClaimsBatchWithEvidence,
   extractClaimsWithLLM,
   type BatchEvaluationInput,
 } from './aiEngine.ts';
+import {
+  ensureUser,
+  getReportFromDb,
+  listReportsFromDb,
+  saveReportToDb,
+} from './db.ts';
 import {
   detectInlineCitations,
   parseBibliographyEntries,
   splitBodyAndBibliography,
 } from './extractors.ts';
 import { runRuleBasedNumericalCheck } from './numberChecker.ts';
-import { extractQueryHintsFromBib, lookupOriginalResearch } from './researchApi.ts';
+import {
+  extractQueryHintsFromBib,
+  lookupOriginalResearch,
+  retrieveRelevantChunksForClaim,
+} from './researchApi.ts';
 import {
   ILLUSTRATIVE_DEMO_CORPUS,
   SAMPLE_EXPECTED_MATRIX,
 } from './samplePaper.ts';
 
-const REPORTS_FILE = path.resolve(process.cwd(), '.citeverify-reports.json');
-
-const reportStore = new Map<string, DocumentReport>();
-
-function loadPersistedReports() {
-  try {
-    if (fs.existsSync(REPORTS_FILE)) {
-      const raw = fs.readFileSync(REPORTS_FILE, 'utf-8');
-      const arr = JSON.parse(raw);
-      if (Array.isArray(arr)) {
-        for (const r of arr) {
-          if (r?.reportId) reportStore.set(r.reportId, r);
-        }
-      }
-    }
-  } catch {
-    // Ignore corrupt cache file on boot
-  }
-}
-
-function savePersistedReports() {
-  try {
-    const arr = Array.from(reportStore.values()).slice(0, 25);
-    fs.writeFileSync(REPORTS_FILE, JSON.stringify(arr, null, 2), 'utf-8');
-  } catch {
-    // Non-fatal persistence warning
-  }
-}
-
-loadPersistedReports();
-
-export function getAllReports(): DocumentReport[] {
-  return Array.from(reportStore.values()).sort(
-    (a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
-  );
+export function getAllReports(userId?: string): DocumentReport[] {
+  return listReportsFromDb(userId);
 }
 
 export function getReportById(id: string): DocumentReport | undefined {
-  return reportStore.get(id);
+  return getReportFromDb(id);
 }
 
 export function saveReport(report: DocumentReport): void {
-  reportStore.set(report.reportId, report);
-  savePersistedReports();
+  saveReportToDb(report);
 }
 
 function matchCitationToBib(
@@ -81,12 +57,16 @@ function matchCitationToBib(
 ): BibliographyEntry | undefined {
   if (!matchedCitation || matchedCitation === 'None') return undefined;
 
-  // Numbered: [1], [1, 2]
-  const numMatch = matchedCitation.match(/\[(\d+)/);
-  if (numMatch) {
-    const idx = Number(numMatch[1]);
-    const found = bibEntries.find((b) => b.index === idx);
-    if (found) return found;
+  // Numbered: [1], [1, 2], (1), (1, 2)
+  const numMatches = matchedCitation.match(/\b(\d{1,3})\b/g);
+  if (numMatches && (matchedCitation.includes('[') || matchedCitation.includes('('))) {
+    for (const numStr of numMatches) {
+      const idx = Number(numStr);
+      if (idx >= 1 && idx <= 500) {
+        const found = bibEntries.find((b) => b.index === idx);
+        if (found) return found;
+      }
+    }
   }
 
   // DOI
@@ -97,17 +77,23 @@ function matchCitationToBib(
     if (found) return found;
   }
 
-  // Author / Year
+  // Author / Year (supports "(Smith, 2020)", "(Smith et al. 2020)", "Smith (2020)")
   const surname = matchedCitation.match(/([A-Z][a-zA-Z'-]+)/)?.[1]?.toLowerCase();
   const yearMatch = matchedCitation.match(/\b((?:19|20)\d{2})\b/);
   const year = yearMatch ? Number(yearMatch[1]) : undefined;
   if (surname) {
-    const found = bibEntries.find(
+    const exactMatch = bibEntries.find(
       (b) =>
         b.rawText.toLowerCase().includes(surname) &&
         (!year || b.year === year)
     );
-    if (found) return found;
+    if (exactMatch) return exactMatch;
+
+    // Fallback to surname-only match if year had minor discrepancy
+    const surnameOnly = bibEntries.find((b) =>
+      b.rawText.toLowerCase().includes(surname)
+    );
+    if (surnameOnly) return surnameOnly;
   }
 
   return undefined;
@@ -118,44 +104,71 @@ function fallbackSentenceClaimExtraction(bodyText: string) {
     .replace(/\n+/g, ' ')
     .split(/(?<=[.!?])\s+/)
     .map((s) => s.trim())
-    .filter((s) => s.length > 35 && s.length < 450);
+    .filter((s) => s.length > 30 && s.length < 500);
 
-  return sentences
-    .filter(
-      (s) =>
-        /\[\d+\]|\([A-Z][a-zA-Z'-]+.*?\d{4}\)|\d+%|\bp\s*[<>=]|\bdemonstrated\b|\bshowed\b|\bestablished\b|\bachieve[ds]?\b|\breduce[ds]?\b/i.test(
-          s
-        )
-    )
-    .slice(0, 10)
-    .map((s) => {
-      const num = s.match(/\[(\d+(?:\s*[-–,]\s*\d+)*)\]/);
-      const ay = s.match(/\(([A-Z][a-zA-Z'-]+.*?,\s*\d{4})\)/);
-      const citation = num?.[0] || ay?.[0] || 'None';
-      const fmt: 'numbered' | 'author-year' | 'missing' = num
-        ? 'numbered'
-        : ay
-        ? 'author-year'
-        : 'missing';
-      return {
-        claimText: s,
-        section: 'Manuscript Body',
-        matchedCitation: citation,
-        citationFormat: fmt,
-      };
-    });
+  const candidates = sentences.filter(
+    (s) =>
+      /\[\d+\]|\(\d+\)|\([A-Z][a-zA-Z'-]+.*?\d{4}\)|\d+%|\bp\s*[<>=]|\bdemonstrated\b|\bshowed\b|\bestablished\b|\bachieve[ds]?\b|\breduce[ds]?\b|\bincrease[ds]?\b/i.test(
+        s
+      )
+  );
+
+  const selected = candidates.length > 0 ? candidates : sentences;
+
+  return selected.slice(0, 10).map((s) => {
+    const num = s.match(/\[(\d+(?:\s*[-–,]\s*\d+)*)\]/);
+    const ay = s.match(/\(([A-Z][a-zA-Z'-]+.*?,?\s*(?:19|20)\d{2})\)/);
+    const citation = num?.[0] || ay?.[0] || 'None';
+    const fmt: 'numbered' | 'author-year' | 'missing' = num
+      ? 'numbered'
+      : ay
+      ? 'author-year'
+      : 'missing';
+    return {
+      claimText: s,
+      section: 'Manuscript Body',
+      matchedCitation: citation,
+      citationFormat: fmt,
+    };
+  });
 }
 
 export async function runVerificationPipeline(params: {
   text: string;
   filename: string;
   fileSizeBytes: number;
-  fileType: 'PDF' | 'TXT' | 'SAMPLE';
+  fileType: 'PDF' | 'TXT' | 'IMAGE' | 'SAMPLE';
+  extractionMethod?: DocumentReport['extractionMethod'];
+  ocrUsed?: boolean;
+  fileBuffer?: Buffer;
+  mimeType?: string;
+  userId?: string;
+  userDisplayName?: string;
   isSampleDemo: boolean;
   onProgress?: (ev: PipelineProgressEvent) => void;
 }): Promise<DocumentReport> {
-  const { text, filename, fileSizeBytes, fileType, isSampleDemo, onProgress } =
-    params;
+  const {
+    text,
+    filename,
+    fileSizeBytes,
+    fileType,
+    extractionMethod = fileType === 'SAMPLE'
+      ? 'Sample'
+      : fileType === 'PDF'
+      ? 'PDF Text Layer'
+      : fileType === 'IMAGE'
+      ? 'Image Vision'
+      : 'Plain Text',
+    ocrUsed = false,
+    fileBuffer,
+    mimeType,
+    userId = 'usr-elena',
+    userDisplayName,
+    isSampleDemo,
+    onProgress,
+  } = params;
+
+  const activeUser = ensureUser(userId, userDisplayName);
   const pipelineWarnings: string[] = [];
 
   const emit = (
@@ -171,23 +184,59 @@ export async function runVerificationPipeline(params: {
   emit(
     1,
     'Reading document',
-    `Parsed ${text.length.toLocaleString()} characters from ${filename}`,
+    `Parsed ${text.length.toLocaleString()} characters via ${extractionMethod} from ${filename}`,
     12
   );
 
   const { bodyText, bibliographySection } = splitBodyAndBibliography(text);
   const bibliographyEntries = parseBibliographyEntries(bibliographySection);
 
-  // Stage 2: Extracting scientific claims
+  // Stage 2: Extracting scientific claims + Multimodal Figure/Graph Analysis (parallel when PDF/Image uploaded)
   emit(
     2,
     'Extracting scientific claims',
-    'Identifying atomic empirical statements and statistical assertions...',
+    fileBuffer && (fileType === 'PDF' || fileType === 'IMAGE')
+      ? 'Extracting empirical claims and inspecting embedded figures, charts, and graphs with Vision AI...'
+      : 'Identifying atomic empirical statements and statistical assertions...',
     28
   );
 
-  const llmClaimResult = await extractClaimsWithLLM(bodyText);
+  let figuresAnalyzed: FigureAnalysis[] = [];
+  const shouldInspectFigures =
+    Boolean(fileBuffer) &&
+    Boolean(mimeType) &&
+    (fileType === 'PDF' || fileType === 'IMAGE');
+
+  const [llmClaimResult, figureResult] = await Promise.all([
+    extractClaimsWithLLM(bodyText),
+    shouldInspectFigures
+      ? analyzeDocumentFiguresAndGraphs(fileBuffer!, mimeType!, bodyText)
+      : Promise.resolve({ figures: [] as FigureAnalysis[], warning: undefined }),
+  ]);
+
+  if (figureResult.warning) {
+    pipelineWarnings.push(figureResult.warning);
+  }
+  figuresAnalyzed = figureResult.figures;
+
   let draftClaims = llmClaimResult.claims;
+
+  // If standalone figure/chart image yielded visual findings without text sentences, synthesize claim from figure
+  if (
+    draftClaims.length === 0 &&
+    figuresAnalyzed.length > 0
+  ) {
+    draftClaims = figuresAnalyzed.map((f) => ({
+      claimText: `${f.figureId} (${f.title}): ${f.keyFinding}${
+        f.extractedValues.length > 0
+          ? ` [Values: ${f.extractedValues.join(', ')}]`
+          : ''
+      }`,
+      section: 'Figure & Graph Analysis',
+      matchedCitation: 'None',
+      citationFormat: 'missing' as const,
+    }));
+  }
 
   if (llmClaimResult.error || draftClaims.length === 0) {
     if (llmClaimResult.error) {
@@ -195,43 +244,52 @@ export async function runVerificationPipeline(params: {
         `LLM Claim Extraction unavailable (${llmClaimResult.error}); used deterministic syntactic claim extraction.`
       );
     }
-    draftClaims = fallbackSentenceClaimExtraction(bodyText);
+    if (draftClaims.length === 0) {
+      draftClaims = fallbackSentenceClaimExtraction(bodyText);
+    }
   }
 
   // Stage 3: Detecting citations
   emit(
     3,
     'Detecting citations',
-    `Scanning inline [n], (Author, Year), et al., and DOI patterns across ${bibliographyEntries.length} bibliography entries...`,
+    `Scanning inline [n], (n), (Author, Year), et al., and DOI patterns across ${bibliographyEntries.length} bibliography entries...`,
     44
   );
 
   const detectedCitations = detectInlineCitations(bodyText, bibliographyEntries);
 
-  // Stage 4: Finding original research (OpenAlex + Crossref + Illustrative Demo Corpus)
+  // Stage 4: Finding original research (OpenAlex + Crossref + Unpaywall + Europe PMC Full Text)
   emit(
     4,
     'Finding original research',
-    'Querying OpenAlex and Crossref APIs for source metadata and genuine abstracts...',
+    'Querying OpenAlex, Crossref, Unpaywall, and Europe PMC for metadata, abstracts, and Open-Access full text...',
     62
   );
 
   const sourceCache = new Map<
     string,
-    Promise<{ source: ResearchSourceRecord; flags: CitationFlag[] }>
+    Promise<{
+      source: ResearchSourceRecord;
+      flags: CitationFlag[];
+      fullTextBody?: string;
+    }>
   >();
 
   function resolveCitationSource(
     matchedCitation: string,
     bibEntry?: BibliographyEntry
-  ): Promise<{ source: ResearchSourceRecord; flags: CitationFlag[] }> {
+  ): Promise<{
+    source: ResearchSourceRecord;
+    flags: CitationFlag[];
+    fullTextBody?: string;
+  }> {
     const cacheKey = bibEntry?.rawText || matchedCitation;
     if (sourceCache.has(cacheKey)) {
       return sourceCache.get(cacheKey)!;
     }
 
     const promise = (async () => {
-      // Check if this is an explicitly tagged Illustrative Demo reference (Sample Mode only)
       const demoIdMatch = bibEntry?.rawText.match(
         /\[Illustrative Demo Reference ID:\s*(CV-DEMO-\d+)\]/i
       );
@@ -257,7 +315,6 @@ export async function runVerificationPipeline(params: {
     return promise;
   }
 
-  // Resolve all cited sources concurrently first
   const preparedClaims = await Promise.all(
     draftClaims.map(async (draft, i) => {
       const claimId = `CLM-${String(i + 1).padStart(3, '0')}`;
@@ -272,6 +329,7 @@ export async function runVerificationPipeline(params: {
 
       let source: ResearchSourceRecord;
       let citationFlags: CitationFlag[] = [];
+      let fullTextBody: string | undefined;
 
       if (isMissingCitation) {
         citationFlags = ['Missing Citation'];
@@ -288,13 +346,30 @@ export async function runVerificationPipeline(params: {
           draft.matchedCitation,
           bibEntry
         );
-        source = resolved.source;
+        source = { ...resolved.source };
         citationFlags = [...resolved.flags];
+        fullTextBody = resolved.fullTextBody;
       }
+
+      // Retrieve semantically targeted chunks from Open-Access Full Text when available
+      const chunkResult = retrieveRelevantChunksForClaim(
+        draft.claimText,
+        fullTextBody,
+        source.abstractText,
+        source.passageSource
+      );
+
+      if (chunkResult.topChunks.length > 0) {
+        source.fullTextChunksUsed = chunkResult.topChunks;
+        source.relevantPassage = chunkResult.topChunks[0];
+      }
+
+      const targetedPremiseText =
+        chunkResult.combinedPremise || source.abstractText || '';
 
       const numericalCheck = runRuleBasedNumericalCheck(
         draft.claimText,
-        source.abstractText
+        targetedPremiseText
       );
 
       return {
@@ -304,11 +379,12 @@ export async function runVerificationPipeline(params: {
         source,
         citationFlags,
         numericalCheck,
+        targetedPremiseText,
       };
     })
   );
 
-  // Stage 5: Comparing evidence (Rule-based Numerical Check + Batched NLI + Context Trap + Evidence DNA)
+  // Stage 5: Comparing evidence
   emit(
     5,
     'Comparing evidence',
@@ -323,6 +399,7 @@ export async function runVerificationPipeline(params: {
     citationFlags: p.citationFlags,
     source: p.source,
     numericalCheck: p.numericalCheck,
+    targetedPremiseText: p.targetedPremiseText,
   }));
 
   const evaluationMap = await evaluateClaimsBatchWithEvidence(batchInputs);
@@ -403,7 +480,7 @@ export async function runVerificationPipeline(params: {
   emit(
     6,
     'Generating verification report',
-    'Compiling Evidence DNA™ scorecards, source timeline, and audit metrics...',
+    'Compiling Evidence DNA™ scorecards, figure analysis, source timeline, and database record...',
     96
   );
 
@@ -413,10 +490,17 @@ export async function runVerificationPipeline(params: {
       .map((c) => c.source.doi || c.source.openAlexId || c.source.title)
   );
 
+  const uniqueFullTextSources = new Set(
+    claims
+      .filter((c) => c.source.fullTextRetrieved)
+      .map((c) => c.source.doi || c.source.openAlexId || c.source.title)
+  );
+
   const summaryStats: DocumentSummaryStats = {
     totalClaims: claims.length,
     citationsFound: detectedCitations.length,
     verifiedSources: uniqueVerifiedSources.size,
+    fullTextSources: uniqueFullTextSources.size,
     supportedClaims: claims.filter((c) => c.verdict === 'Supported').length,
     partiallySupportedClaims: claims.filter(
       (c) => c.verdict === 'Partially Supported'
@@ -442,9 +526,9 @@ export async function runVerificationPipeline(params: {
     citationIssuesCount:
       claims.filter((c) => c.citationFlags.length > 0).length +
       bibliographyEntries.filter((b) => b.isDuplicate).length,
+    figuresAnalyzed: figuresAnalyzed.length,
   };
 
-  // Build research source timeline from actual cited publication years
   const yearMap = new Map<number, { sources: Set<string>; verified: Set<string> }>();
   for (const c of claims) {
     const yr = c.source.year || c.bibliographyEntry?.year;
@@ -467,9 +551,13 @@ export async function runVerificationPipeline(params: {
 
   const report: DocumentReport = {
     reportId: `REP-${crypto.randomBytes(4).toString('hex').toUpperCase()}`,
+    userId: activeUser.id,
+    userDisplayName: activeUser.displayName,
     filename,
     fileSizeBytes,
     fileType,
+    extractionMethod,
+    ocrUsed,
     uploadedAt: new Date().toISOString(),
     isSampleDemo,
     extractedTextPreview: text.slice(0, 6000),
@@ -477,6 +565,7 @@ export async function runVerificationPipeline(params: {
     bibliographyEntries,
     detectedCitations,
     citationAudit,
+    figuresAnalyzed,
     claims,
     summaryStats,
     timelineData,

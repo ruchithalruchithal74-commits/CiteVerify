@@ -16,6 +16,7 @@ import type {
   DocumentReport,
   HumanReviewDecision,
   VerificationVerdict,
+  WorkspaceUser,
 } from '../types.ts';
 import {
   formatShortDate,
@@ -36,6 +37,7 @@ export type ClaimFilterOption =
 
 interface ClaimInvestigationPageProps {
   report: DocumentReport | null;
+  activeUser: WorkspaceUser;
   initialFilter?: VerificationVerdict | 'All';
   onGoUpload: () => void;
   onInspectEvidence: (claimId: string) => void;
@@ -54,6 +56,7 @@ const FILTER_OPTIONS: ClaimFilterOption[] = [
 
 export function ClaimInvestigationPage({
   report,
+  activeUser,
   initialFilter = 'All',
   onGoUpload,
   onInspectEvidence,
@@ -65,9 +68,13 @@ export function ClaimInvestigationPage({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [commentDraft, setCommentDraft] = useState('');
-  const [reviewerName, setReviewerName] = useState('Academic Reviewer');
+  const [reviewerName, setReviewerName] = useState(activeUser.displayName);
   const [savingReview, setSavingReview] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setReviewerName(activeUser.displayName);
+  }, [activeUser.id, activeUser.displayName]);
 
   useEffect(() => {
     setFilter(
@@ -150,6 +157,7 @@ export function ClaimInvestigationPage({
             decision,
             comments: commentDraft,
             reviewer: reviewerName,
+            userId: activeUser.id,
           }),
         }
       );
@@ -288,11 +296,13 @@ export function ClaimInvestigationPage({
                         claim.bibliographyEntry?.rawText ||
                         'No matching publication resolved'}
                     </p>
-                    {claim.source.year && (
+                    {(claim.source.year || claim.source.fullTextRetrieved) && (
                       <p className="font-mono text-[11px] text-[#D6B875] mt-1 tabular-nums">
-                        {claim.source.year}
+                        {claim.source.year || ''}
                         {claim.source.isIllustrativeDemo
                           ? ' · Illustrative Demo Corpus'
+                          : claim.source.fullTextRetrieved
+                          ? ` · ${claim.source.passageSource}`
                           : claim.source.verified
                           ? ' · OpenAlex / Crossref Verified'
                           : ''}
